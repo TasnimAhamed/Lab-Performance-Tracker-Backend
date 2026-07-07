@@ -13,7 +13,7 @@ const app = express();
 
 const allowedOrigins = [
   "http://localhost:5173",
-  "https://diulab.vercel.app",
+  "https://lab-performance-tracker.vercel.app",
 ];
 
 app.use(
