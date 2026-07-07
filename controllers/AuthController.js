@@ -34,7 +34,7 @@ export const googleLogin = async (req, res) => {
 
     const token = jwt.sign(
       { id: user._id }, 
-      process.env.JWT_SECRET, 
+      process.env.JWT_SECRET || 'secret-key-fallback-12345', 
       { expiresIn: '30d' }
     );
 
