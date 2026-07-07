@@ -29,7 +29,7 @@ export const getGradesAndUsers = async (req, res) => {
     }
 
     const labs = await Lab.find({ sectionId: section._id });
-    const students = await User.find({ sectionId: section._id, role: 'Student' });
+    const students = await User.find({ sectionIds: section._id, role: 'Student' });
 
     const studentIds = students.map(s => s._id);
 
@@ -75,7 +75,11 @@ export const getGradesAndUsers = async (req, res) => {
       }
     }
 
-    const allScores = await Score.find({ studentId: { $in: studentIds } });
+    const labIds = labs.map(l => l._id);
+    const allScores = await Score.find({ 
+      studentId: { $in: studentIds },
+      labId: { $in: labIds }
+    });
 
     const scoresMap = {};
     allScores.forEach(score => {
@@ -130,7 +134,7 @@ export const addTodayLab = async (req, res) => {
       problems: []
     });
 
-    const students = await User.find({ sectionId: section._id, role: 'Student' });
+    const students = await User.find({ sectionIds: section._id, role: 'Student' });
 
     for (let student of students) {
       await Score.create({
@@ -177,11 +181,29 @@ export const updateStudentMarks = async (req, res) => {
 export const removeUser = async (req, res) => {
   try {
     const userId = req.params.id;
+    const { sectionId } = req.query;
 
-    await Score.deleteMany({ studentId: userId });
+    if (!sectionId) {
+      return res.status(400).json({ success: false, message: "sectionId query parameter is required" });
+    }
 
-    await User.findByIdAndDelete(userId);
-    res.status(200).json({ success: true, message: 'Student and their data removed' });
+    const student = await User.findById(userId);
+    if (!student) {
+      return res.status(404).json({ success: false, message: "Student not found" });
+    }
+
+    // Remove sectionId from user's sectionIds
+    student.sectionIds = (student.sectionIds || []).filter(id => id.toString() !== sectionId.toString());
+    await student.save();
+
+    // Find all labs of the section
+    const labs = await Lab.find({ sectionId });
+    const labIds = labs.map(l => l._id);
+
+    // Delete scores for this section's labs
+    await Score.deleteMany({ studentId: userId, labId: { $in: labIds } });
+
+    res.status(200).json({ success: true, message: 'Student and their scores removed from this section successfully' });
   } catch (error) {
     console.error("Error in removeUser:", error);
     res.status(500).json({ success: false, message: error.message });
@@ -238,8 +260,11 @@ export const clearSection = async (req, res) => {
     await Lab.deleteMany({ sectionId: section._id });
   
     await User.updateMany(
-      { sectionId: section._id, role: 'Student' },
-      { $set: { sectionId: null } }
+      { sectionIds: section._id, role: 'Student' },
+      { 
+        $pull: { sectionIds: section._id },
+        $set: { sectionId: null }
+      }
     );
 
     res.status(200).json({ success: true, message: 'All labs and scores for this section cleared' });
@@ -264,7 +289,7 @@ export const getTeacherSections = async (req, res) => {
 
     const totalStudents = await User.countDocuments({
       role: 'Student',
-      sectionId: { $in: sectionIds }
+      sectionIds: { $in: sectionIds }
     });
 
     const labs = await Lab.find({ sectionId: { $in: sectionIds } });
@@ -273,7 +298,7 @@ export const getTeacherSections = async (req, res) => {
 
     // Compute student count for each section
     const sectionsWithCount = await Promise.all(sections.map(async (sec) => {
-      const studentCount = await User.countDocuments({ role: 'Student', sectionId: sec._id });
+      const studentCount = await User.countDocuments({ role: 'Student', sectionIds: sec._id });
       return {
         ...sec.toObject(),
         studentCount
@@ -297,7 +322,7 @@ export const getTeacherSections = async (req, res) => {
 };
 
 export const createSection = async (req, res) => {
-  const { name, courseCode, semester, joinToken } = req.body;
+  const { name, courseCode, courseName, semester, joinToken } = req.body;
 
   try {
     const teacher = await User.findById(req.user.id);
@@ -307,6 +332,20 @@ export const createSection = async (req, res) => {
 
     if (!name || !courseCode || !semester) {
       return res.status(400).json({ success: false, message: "Name, Course Code, and Semester are required." });
+    }
+
+    // Check duplicate courseCode + name + semester for this teacher
+    const duplicateSection = await Section.findOne({
+      courseCode: courseCode.trim(),
+      name: name.trim(),
+      semester: semester.trim(),
+      teacherIds: teacher._id
+    });
+    if (duplicateSection) {
+      return res.status(400).json({
+        success: false,
+        message: "You have already created a section with this Course Code, Section Name, and Semester."
+      });
     }
 
     let token = joinToken;
@@ -322,6 +361,7 @@ export const createSection = async (req, res) => {
     const newSection = await Section.create({
       name,
       courseCode,
+      courseName: courseName || 'N/A',
       semester,
       joinToken: token,
       teacherIds: [teacher._id]
@@ -336,13 +376,34 @@ export const createSection = async (req, res) => {
 
 export const updateSection = async (req, res) => {
   const { id } = req.params;
-  const { name, courseCode, semester, joinToken } = req.body;
+  const { name, courseCode, courseName, semester, joinToken } = req.body;
 
   try {
     const teacher = await User.findById(req.user.id);
     const section = await Section.findOne({ _id: id, teacherIds: teacher._id });
     if (!section) {
       return res.status(404).json({ success: false, message: "Section not found or unauthorized." });
+    }
+
+    // Check duplicate courseCode + name + semester if being changed
+    if (name || courseCode || semester) {
+      const checkName = name || section.name;
+      const checkCode = courseCode || section.courseCode;
+      const checkSemester = semester || section.semester;
+
+      const duplicateSection = await Section.findOne({
+        _id: { $ne: id },
+        courseCode: checkCode.trim(),
+        name: checkName.trim(),
+        semester: checkSemester.trim(),
+        teacherIds: teacher._id
+      });
+      if (duplicateSection) {
+        return res.status(400).json({
+          success: false,
+          message: "A section with this Course Code, Section Name, and Semester already exists for you."
+        });
+      }
     }
 
     if (joinToken && joinToken !== section.joinToken) {
@@ -355,6 +416,7 @@ export const updateSection = async (req, res) => {
 
     if (name) section.name = name;
     if (courseCode) section.courseCode = courseCode;
+    if (courseName) section.courseName = courseName;
     if (semester) section.semester = semester;
     if (req.body.joinCodeActive !== undefined) section.joinCodeActive = req.body.joinCodeActive;
 
@@ -381,7 +443,13 @@ export const deleteSection = async (req, res) => {
 
     await Score.deleteMany({ labId: { $in: labIds } });
     await Lab.deleteMany({ sectionId: id });
-    await User.updateMany({ sectionId: id }, { $unset: { sectionId: "" } });
+    await User.updateMany(
+      { $or: [{ sectionIds: id }, { sectionId: id }] },
+      { 
+        $pull: { sectionIds: id },
+        $unset: { sectionId: "" } 
+      }
+    );
     await section.deleteOne();
 
     res.status(200).json({ success: true, message: "Section deleted successfully" });

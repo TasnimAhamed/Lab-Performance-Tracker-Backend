@@ -21,17 +21,24 @@ export const joinSectionByToken = async (req, res) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-
-    if (student.sectionId) {
-      const oldLabs = await Lab.find({ sectionId: student.sectionId });
-      const oldLabIds = oldLabs.map(l => l._id);
-      await Score.deleteMany({ studentId: student._id, labId: { $in: oldLabIds } });
+    // Initialize sectionIds if it doesn't exist
+    if (!student.sectionIds) {
+      student.sectionIds = [];
     }
 
+    // Check if he already joined or not
+    const alreadyJoined = student.sectionIds.some(
+      id => id.toString() === section._id.toString()
+    );
+    if (alreadyJoined) {
+      return res.status(400).json({ success: false, message: 'You have already joined this section.' });
+    }
 
+    student.sectionIds.push(section._id);
+    // Backward compatibility: set sectionId as the latest joined section
     student.sectionId = section._id;
-    await student.save();
 
+    await student.save();
 
     const sectionLabs = await Lab.find({ sectionId: section._id });
     for (const lab of sectionLabs) {
@@ -59,57 +66,109 @@ export const joinSectionByToken = async (req, res) => {
   }
 };
 
+export const leaveSection = async (req, res) => {
+  const { sectionId } = req.body;
+
+  try {
+    const student = await User.findById(req.user.id);
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'User not found' });
+    }
+
+    if (!student.sectionIds || student.sectionIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'You are not enrolled in this section.' });
+    }
+
+    // Pull from sectionIds array
+    student.sectionIds = student.sectionIds.filter(
+      id => id.toString() !== sectionId
+    );
+
+    // If active sectionId was this one, update it to the next available or null
+    if (student.sectionId && student.sectionId.toString() === sectionId) {
+      student.sectionId = student.sectionIds.length > 0 ? student.sectionIds[0] : null;
+    }
+
+    await student.save();
+
+    // Delete student scores for labs belonging to this section
+    const sectionLabs = await Lab.find({ sectionId });
+    const labIds = sectionLabs.map(l => l._id);
+    await Score.deleteMany({ studentId: student._id, labId: { $in: labIds } });
+
+    res.status(200).json({ success: true, message: 'Successfully left section' });
+  } catch (error) {
+    console.error("Leave section error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 
 export const getDashboardData = async (req, res) => {
   try {
-    const student = await User.findById(req.user.id).populate('sectionId');
+    const { sectionId } = req.query;
+    const student = await User.findById(req.user.id);
     if (!student) {
       return res.status(404).json({ success: false, message: "User not found" });
     }
 
-    if (!student.sectionId) {
+    const activeSectionId = sectionId || student.sectionId;
+
+    if (!activeSectionId) {
       return res.status(200).json({
         success: true,
         result: { user: student } 
       });
     }
 
-  
-    const labsList = await Lab.find({ sectionId: student.sectionId._id });
+    // Verify enrollment
+    const isEnrolled = student.sectionIds && student.sectionIds.some(
+      id => id.toString() === activeSectionId.toString()
+    );
+    if (!isEnrolled && student.sectionId?.toString() !== activeSectionId.toString()) {
+      return res.status(403).json({ success: false, message: "Unauthorized or not enrolled in this section" });
+    }
 
- 
+    const labsList = await Lab.find({ sectionId: activeSectionId });
     const userScores = await Score.find({ studentId: student._id });
 
-  
     const user_labs = labsList.map(lab => {
       const scoreObj = userScores.find(s => s.labId.toString() === lab._id.toString());
+      const totalProblems = lab.problems?.length || 0;
+      const solvedProblems = scoreObj?.submissions?.filter(sub => sub.status === 'Solved').length || 0;
       return {
         lab: lab,          
+        solved: solvedProblems,
+        totalProblems: totalProblems,
+        attendance: scoreObj?.attendance || 'N/A',
         score: scoreObj ? scoreObj.score : 0
       };
     });
 
-   
-    const totalSolved = userScores.reduce((sum, s) => sum + s.score, 0);
+    const totalSolved = userScores.filter(s => 
+      labsList.some(lab => lab._id.toString() === s.labId.toString())
+    ).reduce((sum, s) => sum + s.score, 0);
+
     const totalPossibleProblems = labsList.reduce((sum, l) => sum + (l.problems?.length || l.totalProblems || 0), 0);
 
-    
-    const allStudents = await User.find({ sectionId: student.sectionId._id });
+    const allStudents = await User.find({ sectionIds: activeSectionId });
     const allScores = await Score.find({
       studentId: { $in: allStudents.map(s => s._id) }
     });
 
-const leaderboard = allStudents
-  .filter(s => s.role === 'Student') // শুধু Student
-  .map(s => {
-    const sTotal = allScores
-      .filter(score => score.studentId.toString() === s._id.toString())
-      .reduce((sum, sc) => sum + sc.score, 0);
-    return {
-      userId: { _id: s._id, name: s.name },
-      solved_problems: sTotal
-    };
-  }).sort((a, b) => b.solved_problems - a.solved_problems);
+    const leaderboard = allStudents
+      .filter(s => s.role === 'Student')
+      .map(s => {
+        const studentSectionScores = allScores.filter(
+          score => score.studentId.toString() === s._id.toString() &&
+          labsList.some(lab => lab._id.toString() === score.labId.toString())
+        );
+        const sTotal = studentSectionScores.reduce((sum, sc) => sum + sc.score, 0);
+        return {
+          userId: { _id: s._id, name: s.name },
+          solved_problems: sTotal
+        };
+      }).sort((a, b) => b.solved_problems - a.solved_problems);
 
     res.status(200).json({
       success: true,
@@ -131,7 +190,12 @@ const leaderboard = allStudents
 export const getUserProfile = async (req, res) => {
   try {
     const userId = req.user.id;
-    const user = await User.findById(userId).populate('sectionId', 'name description');
+    const user = await User.findById(userId)
+      .populate('sectionId', 'name description')
+      .populate({
+        path: 'sectionIds',
+        populate: { path: 'teacherIds', select: 'name email' }
+      });
 
     if (!user) {
       return res.status(404).json({
@@ -295,6 +359,16 @@ export const loginWithCredentials = async (req, res) => {
     });
   } catch (error) {
     console.error("Local login error:", error);
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+export const getAvailableSections = async (req, res) => {
+  try {
+    const sections = await Section.find({}).populate('teacherIds', 'name email');
+    res.status(200).json({ success: true, sections });
+  } catch (error) {
+    console.error("Get available sections error:", error);
     res.status(500).json({ success: false, message: error.message });
   }
 };

@@ -11,32 +11,6 @@ export const getAllUsers = async (req, res) => {
   }
 };
 
-
-const findOrCreateTeacherSection = async (teacherId) => {
-  // এমন একটি সেকশন খুঁজুন যাতে অন্তত একজন টিচার আছে
-  let section = await Section.findOne({ teacherIds: { $exists: true, $not: { $size: 0 } } });
-  
-  if (!section) {
-    // কোনো টিচার-যুক্ত সেকশন নেই → নতুন তৈরি করুন
-    section = await Section.create({
-      name: `Section-${Date.now()}`,
-      joinToken: `CSE-${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
-      teacherIds: [teacherId]
-    });
-  } else {
-    // যদি টিচারটি ইতিমধ্যে এই সেকশনের তালিকায় না থাকে, তবে যোগ করুন
-    if (!section.teacherIds.includes(teacherId)) {
-      section.teacherIds.push(teacherId);
-      await section.save();
-    }
-  }
-  
-  return section;
-};
-
-// ==========================================
-// ২. ইউজার রোল আপডেট (সংশোধিত)
-// ==========================================
 export const updateUserRole = async (req, res) => {
   const { id } = req.params;
   const { role } = req.body; 
@@ -65,28 +39,23 @@ export const updateUserRole = async (req, res) => {
     // ---- টিচার বানানো ----
     if (role === 'Teacher') {
       user.role = 'Teacher';   // ✅ ঠিক করা হয়েছে
-      
-      // সেকশন খুঁজুন/তৈরি করুন (সব টিচার একই সেকশনে)
-      const section = await findOrCreateTeacherSection(user._id);
-      user.sectionId = section._id;
+      user.sectionId = null;
 
       // স্টুডেন্ট থাকাকালীন স্কোর মুছে ফেলুন (টিচারের স্কোর দরকার নেই)
       await Score.deleteMany({ studentId: user._id });
 
       await user.save();
-      console.log(`✅ User ${user.name} promoted to Teacher and assigned to Section ${section._id}`);
+      console.log(`✅ User ${user.name} promoted to Teacher`);
     }
     // ---- স্টুডেন্ট বানানো ----
     else if (role === 'Student') {
       user.role = 'Student';   // ✅ ঠিক করা হয়েছে
 
       // যদি আগে কোনো সেকশনের টিচার ছিলেন, তবে সেখান থেকে সরান
-      if (user.sectionId) {
-        await Section.updateOne(
-          { _id: user.sectionId },
-          { $pull: { teacherIds: user._id } }
-        );
-      }
+      await Section.updateMany(
+        { teacherIds: user._id },
+        { $pull: { teacherIds: user._id } }
+      );
 
       // সেকশন থেকে বের করে দিন (জয়েন টোকেন দিয়ে আবার জয়েন করতে হবে)
       user.sectionId = null;
@@ -95,7 +64,7 @@ export const updateUserRole = async (req, res) => {
       await Score.deleteMany({ studentId: user._id });
 
       await user.save();
-      console.log(`✅ User ${user.name} demoted to Student and removed from section.`);
+      console.log(`✅ User ${user.name} demoted to Student and removed from sections.`);
     }
     // ---- অন্যান্য রোল (যেমন Maintance) ----
     else {

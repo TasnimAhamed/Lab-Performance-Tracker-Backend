@@ -4,6 +4,7 @@ import mongoose from 'mongoose';
 const SectionSchema = new mongoose.Schema({
   name: { type: String, required: true }, 
   courseCode: { type: String, default: 'N/A' },
+  courseName: { type: String, default: 'N/A' },
   semester: { type: String, default: 'N/A' },
   joinToken: { type: String, required: true, unique: true },
   joinCodeActive: { type: Boolean, default: true },
@@ -48,6 +49,7 @@ const UserSchema = new mongoose.Schema({
     default: 'Student' 
   },
   sectionId: { type: mongoose.Schema.Types.ObjectId, ref: 'Section' },
+  sectionIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Section' }],
   profilePicture: { type: String, default: "" },
   employeeId: { type: String, unique: true, sparse: true },
   password: { type: String },
