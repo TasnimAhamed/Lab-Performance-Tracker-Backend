@@ -1,0 +1,35 @@
+{
+  "name": "lpt-backend",
+  "version": "1.0.0",
+  "description": "",
+  "homepage": "https://github.com/banrayndox/lpt-backend#readme",
+  "bugs": {
+    "url": "https://github.com/banrayndox/lpt-backend/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/banrayndox/lpt-backend.git"
+  },
+  "license": "ISC",
+  "author": "Rakib B",
+  "type": "module",
+  "main": "app.js",
+  "scripts": {
+    "dev": "nodemon app.js",
+    "start": "node app.js"
+  },
+  "dependencies": {
+    "axios": "^1.18.0",
+    "bcryptjs": "^3.0.3",
+    "cors": "^2.8.6",
+    "dns": "^0.2.2",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "google-auth-library": "^10.7.0",
+    "jsonwebtoken": "^9.0.3",
+    "jwt-decode": "^4.0.0",
+    "mongodb": "^7.3.0",
+    "mongoose": "^9.7.1",
+    "nodemon": "^3.1.14"
+  }
+}
