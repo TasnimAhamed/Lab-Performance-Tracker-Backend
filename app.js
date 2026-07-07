@@ -33,12 +33,28 @@ app.use(
 app.use(express.json({ limit: '10mb' }));
 
 
+app.use(async (req, res, next) => {
+  if (mongoose.connection.readyState >= 1) {
+    return next();
+  }
+  try {
+    if (!process.env.MONGO_URI) {
+      throw new Error("MONGO_URI environment variable is missing.");
+    }
+    await mongoose.connect(process.env.MONGO_URI);
+    console.log('MongoDB connected securely.');
+    next();
+  } catch (err) {
+    console.error('Database connection error in middleware:', err);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Database connection failed', 
+      error: err.message 
+    });
+  }
+});
+
 app.use('/api/v1', apiRoutes);
-
-
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('MongoDB connected securely (No separate Section Schema).'))
-  .catch((err) => console.error('Database connection error:', err));
 
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`ES Module server handling single section on port ${PORT}`));
